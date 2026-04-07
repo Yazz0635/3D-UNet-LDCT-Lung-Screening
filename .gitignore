@@ -1,0 +1,17 @@
+# Ignore Raw Medical Data
+01-01-2000-*/
+dataset_3d/
+*.dcm
+*.xml
+*.nii.gz
+
+# Ignore AI Models (Too heavy for GitHub)
+*.pt
+*.pth
+
+# Ignore Python Caches
+__pycache__/
+*.pyc
+
+# Ignore Streamlit/UI caches
+.streamlit/
