@@ -1,0 +1,25 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-primary: #1E3A8A;
+    --color-page: #F3F4F6;
+    --color-card: #FFFFFF;
+    --color-text-primary: #111827;
+    --color-muted-text: #6B7280;
+    --color-healthy: #22C55E;
+    --color-tumor: #EF4444;
+    --color-bbox: #F59E0B;
+    --color-border: #E5E7EB;
+  }
+  
+  body {
+    background-color: var(--color-page);
+    color: var(--color-text-primary);
+    font-family: 'Inter', sans-serif;
+  }
+}
