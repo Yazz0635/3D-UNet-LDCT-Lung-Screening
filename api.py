@@ -62,6 +62,11 @@ async def infer(file: UploadFile = File(...)):
             output = model(input_tensor.to(DEVICE))
             raw_prob_mask = torch.sigmoid(output).squeeze().cpu().numpy()
             
+        # --- THE FIX: AI NOISE REDUCTION ---
+        # Zero out any AI predictions below 30% confidence.
+        # This prevents the frontend from drawing red static on healthy lungs.
+        raw_prob_mask = np.where(raw_prob_mask > 0.30, raw_prob_mask, 0)
+            
         # 3. Format Data for Frontend
         # Convert shapes from (X, Y, Z) into (Z, Y, X) for fast browser slicing
         vol_zyx = np.transpose(original_volume, (2, 1, 0))
@@ -74,23 +79,27 @@ async def infer(file: UploadFile = File(...)):
         bounding_boxes = []
         for z in range(96):
             slice_prob = prob_zyx[z]
-            slice_binary = slice_prob > 5 # Minimum initial detection threshold (5%)
+            # Since we zeroed out <30% above, anything > 0 is our targeted tumor area
+            slice_binary = slice_prob > 0 
             
             boxes_for_slice = []
-            if np.sum(slice_binary) > 0:
+            
+            # THE SPECKLE FILTER: Only draw a bounding box if the cluster is larger than 10 pixels
+            if np.sum(slice_binary) > 10:
                 y_indices, x_indices = np.where(slice_binary)
                 x_min, x_max = int(x_indices.min()), int(x_indices.max())
                 y_min, y_max = int(y_indices.min()), int(y_indices.max())
                 max_conf = float(np.max(slice_prob[slice_binary]))
                 
-                # Add padding like Streamlit did
+                # Add padding
                 pad = 3
                 boxes_for_slice.append({
                     "x": max(0, x_min - pad),
                     "y": max(0, y_min - pad),
                     "width": (x_max - x_min) + (pad * 2),
                     "height": (y_max - y_min) + (pad * 2),
-                    "confidence": round(max_conf, 1)
+                    # Multiply by 100 so React receives "36.8" instead of "0.36"
+                    "confidence": round(max_conf * 100, 1) 
                 })
             bounding_boxes.append(boxes_for_slice)
         

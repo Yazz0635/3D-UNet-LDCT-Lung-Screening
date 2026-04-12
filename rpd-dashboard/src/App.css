@@ -181,4 +181,9 @@
     right: 0;
     border-right-color: var(--border);
   }
+  @media print {
+  body.print-modal-active #root > *:not(.fixed) {
+    display: none !important;
+  }
+}
 }

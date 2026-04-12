@@ -24,14 +24,15 @@ export default function MainStage() {
 
   // Covers 'uploading', 'processing', and 'ready'
   return (
-    <main className="flex-1 flex flex-col bg-page p-4 overflow-hidden space-y-4 min-w-0">
+    <main className="flex-1 flex flex-col bg-page p-4 overflow-y-auto space-y-4 min-w-0">
+      
       {/* Top Slider Row */}
       <div className="flex-shrink-0">
         <ZAxisSlider />
       </div>
       
-      {/* Middle Viewers Row */}
-      <div className="flex-1 flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 min-h-0 overflow-hidden">
+      {/* Middle Viewers Row - CHANGED: min-h-[500px] forces the boxes to be tall */}
+      <div className="flex-1 flex flex-col md:flex-row space-y-4 md:space-y-0 md:space-x-4 min-h-[500px] overflow-hidden">
         <CTViewer />
         <AIOverlayViewer />
       </div>
@@ -40,6 +41,7 @@ export default function MainStage() {
       <div className="h-64 flex-shrink-0 bg-card rounded-xl border border-border shadow-sm flex flex-col overflow-hidden">
         <PanelsManager />
       </div>
+      
     </main>
   );
 }

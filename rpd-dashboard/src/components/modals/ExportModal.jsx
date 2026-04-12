@@ -1,9 +1,18 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useAppContext } from '../../AppContext';
 import { X, FileText, CloudDownload, Clipboard } from 'lucide-react';
 
 export default function ExportModal() {
   const { setActiveModal, MOCK_PATIENT, findings, annotations } = useAppContext();
+
+  // --- THE FIX: Hide the rest of the app when printing ---
+  useEffect(() => {
+    // When this modal mounts, add a class to the body that hides the main app during print
+    document.body.classList.add('print-modal-active');
+    return () => {
+      document.body.classList.remove('print-modal-active');
+    };
+  }, []);
 
   const handlePrint = () => {
     window.print();
@@ -16,7 +25,7 @@ export default function ExportModal() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200 print:bg-transparent print:backdrop-blur-none print:static print:inset-auto print:p-0">
       <div className="bg-white rounded-2xl shadow-xl border border-border w-full max-w-md flex flex-col overflow-hidden print:shadow-none print:border-none print:w-full print:max-w-none print:p-0">
         
         <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-gray-50 print:hidden">

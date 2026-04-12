@@ -1,45 +1,44 @@
-import streamlit as st
+import io
+import base64
+import tempfile
+import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import os
 import matplotlib.patches as patches
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from monai.networks.nets import UNet
 from monai.transforms import Compose, LoadImaged, EnsureChannelFirstd, Resized, ScaleIntensityd, ToTensord
 
-# --- 1. PAGE SETUP ---
-st.set_page_config(layout="wide", page_title="AI Pulmonologist")
-st.title("🩻 3D AI Lung Tumor Segmentation")
-st.markdown("**Project By:** Aditya Roy (23MIC0089) | **Domain:** Soft Computing & Medical AI")
-st.write("This dashboard loads a solid 3D NIfTI block of a Low-Dose CT scan, passes it through our custom 3D U-Net PyTorch model, and highlights suspected tumors in real-time.")
+# --- 1. SETUP API & CORS ---
+app = FastAPI()
 
-# --- 2. SAFETY CHECKS (Prevents Blank Screens) ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- 2. LOAD AI MODEL ---
 MODEL_PATH = "production_best_3d_unet.pth"
-SCAN_PATH = "dataset_3d/patient_0001_scan.nii.gz"
+device = torch.device("cpu") 
+model = UNet(
+    spatial_dims=3, in_channels=1, out_channels=1,
+    channels=(16, 32, 64, 128), strides=(2, 2, 2)
+).to(device)
 
-if not os.path.exists(MODEL_PATH):
-    st.error(f"❌ CRITICAL ERROR: Could not find the AI Model '{MODEL_PATH}'. Did you download it from Kaggle and put it in this folder?")
-    st.stop() # Stops the app from crashing into a blank screen
-
-if not os.path.exists(SCAN_PATH):
-    st.error(f"❌ CRITICAL ERROR: Could not find the 3D Scan '{SCAN_PATH}'. Check your dataset_3d folder!")
-    st.stop()
-
-# --- 3. CACHING THE HEAVY AI MODEL ---
-@st.cache_resource
-def load_model():
-    device = torch.device("cpu") # Safe fallback for web dashboards
-    model = UNet(
-        spatial_dims=3, in_channels=1, out_channels=1,
-        channels=(16, 32, 64, 128), strides=(2, 2, 2)
-    ).to(device)
+if os.path.exists(MODEL_PATH):
     model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-    model.eval() 
-    return model, device
+    model.eval()
+else:
+    print(f"❌ ERROR: Model '{MODEL_PATH}' not found!")
 
-# --- 4. CACHING THE 3D DATA ---
-@st.cache_resource
-def load_and_process_scan():
+# --- 3. PROCESSING FUNCTION ---
+def process_scan(file_path):
     transforms = Compose([
         LoadImaged(keys=["image"]),
         EnsureChannelFirstd(keys=["image"]),
@@ -47,91 +46,90 @@ def load_and_process_scan():
         Resized(keys=["image"], spatial_size=(96, 96, 96), mode="trilinear"), 
         ToTensord(keys=["image"])
     ])
-    data = transforms({"image": SCAN_PATH})
-    input_tensor = data["image"].unsqueeze(0) 
-    original_volume = data["image"][0].numpy() 
-    return input_tensor, original_volume
+    data = transforms({"image": file_path})
+    return data["image"].unsqueeze(0), data["image"][0].numpy()
 
-# --- 5. EXECUTE THE AI ---
-# --- 5. EXECUTE THE AI ---
-with st.spinner("Loading PyTorch Model & 3D CT Volume..."):
-    model, device = load_model()
-    input_tensor, original_volume = load_and_process_scan()
+# --- 4. THE API ENDPOINT ---
+@app.post("/predict")
+async def predict_tumor(
+    file: UploadFile = File(...), 
+    slice_idx: int = Form(-1) # Listens to the frontend slider
+):
+    # 1. Save uploaded file temporarily
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".nii.gz") as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
 
-    with torch.no_grad():
-        output = model(input_tensor.to(device))
+    try:
+        # 2. Run AI Inference
+        input_tensor, original_volume = process_scan(tmp_path)
+        with torch.no_grad():
+            output = model(input_tensor.to(device))
+            raw_prob_mask = torch.sigmoid(output).squeeze().cpu().numpy()
+            pred_mask = (raw_prob_mask > 0.30).astype(np.uint8)
+
+        # --- THE SLIDER LOGIC ---
+        tumor_pixels_per_slice = [np.sum(pred_mask[:, :, z]) for z in range(96)]
         
-        # We save TWO versions of the AI's thoughts now:
-        # 1. The raw probabilities (0.0 to 1.0) to calculate Confidence
-        raw_prob_mask = torch.sigmoid(output).squeeze().cpu().numpy()
+        if slice_idx == -1:
+            # First upload: Auto-detect the slice with the biggest tumor
+            target_slice = int(np.argmax(tumor_pixels_per_slice))
+            if np.sum(pred_mask[:, :, target_slice]) == 0:
+                target_slice = 48 # Default to middle if healthy
+        else:
+            # Slider moved: Show the exact slice the frontend asked for
+            target_slice = slice_idx
+
+        # Calculate diagnostics ONLY for the current slice
+        pixel_count = int(np.sum(pred_mask[:, :, target_slice]))
+
+        # --- DRAWING ---
+        slice_binary = pred_mask[:, :, target_slice]
+        mask_slice_T = slice_binary.T
         
-        # 2. The hard mask (0 or 1) for drawing
-        pred_mask = (raw_prob_mask > 0.05).astype(np.uint8) 
-
-# --- 6. THE USER INTERFACE ---
-st.markdown("---")
-st.markdown("### 🎛️ Navigate 3D Lung Volume")
-
-slice_idx = st.slider("Select Axial Slice (Z-Axis Depth)", min_value=0, max_value=95, value=48)
-
-# --- NEW: CALCULATE CONFIDENCE & DIAGNOSTICS FOR THIS SLICE ---
-slice_binary = pred_mask[:, :, slice_idx]
-slice_probs = raw_prob_mask[:, :, slice_idx]
-
-pixel_count = np.sum(slice_binary)
-
-# If it found a tumor on this slice, find its highest confidence percentage
-if pixel_count > 0:
-    max_confidence = np.max(slice_probs[slice_binary > 0]) * 100
-    st.success(f"🚨 **Tumor Detected on Slice {slice_idx}!** | Size: {pixel_count} pixels | AI Confidence: **{max_confidence:.1f}%**")
-else:
-    st.info(f"✅ No tumors detected on Slice {slice_idx}. (Healthy Tissue)")
-
-# --- DRAWING THE IMAGES ---
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Raw Low-Dose CT")
-    fig1, ax1 = plt.subplots(facecolor='black')
-    ax1.imshow(original_volume[:, :, slice_idx].T, cmap="gray", origin="lower")
-    ax1.axis("off")
-    st.pyplot(fig1)
-
-with col2:
-    st.subheader("AI Segmentation & Bounding Box")
-    fig2, ax2 = plt.subplots(facecolor='black')
-    
-    # 1. Draw base X-ray
-    ax2.imshow(original_volume[:, :, slice_idx].T, cmap="gray", origin="lower")
-    
-    # 2. Prepare and draw the red mask
-    mask_slice_T = slice_binary.T
-    mask_rgba = np.zeros(mask_slice_T.shape + (4,)) 
-    mask_rgba[..., 0] = 1.0 # Pure Red
-    mask_rgba[..., 3] = np.where(mask_slice_T > 0, 0.6, 0) # 60% opacity
-    ax2.imshow(mask_rgba, origin="lower")
-    
-    # 3. --- NEW: DYNAMIC BOUNDING BOX ---
-    if pixel_count > 0:
-        # Find all the X and Y coordinates where the tumor exists
-        y_indices, x_indices = np.where(mask_slice_T > 0)
+        fig, ax = plt.subplots(facecolor='black', figsize=(6, 6))
+        ax.imshow(original_volume[:, :, target_slice].T, cmap="gray", origin="lower")
         
-        # Find the absolute edges of the tumor
-        x_min, x_max = x_indices.min(), x_indices.max()
-        y_min, y_max = y_indices.min(), y_indices.max()
+        mask_rgba = np.zeros(mask_slice_T.shape + (4,)) 
+        mask_rgba[..., 0] = 1.0 
+        mask_rgba[..., 3] = np.where(mask_slice_T > 0, 0.6, 0) 
+        ax.imshow(mask_rgba, origin="lower")
         
-        # Add a little "padding" so the box isn't touching the tumor exactly
-        padding = 3
-        width = (x_max - x_min) + (padding * 2)
-        height = (y_max - y_min) + (padding * 2)
-        
-        # Draw a bright yellow bounding box around the red mask
-        rect = patches.Rectangle(
-            (x_min - padding, y_min - padding), 
-            width, height, 
-            linewidth=2, edgecolor='yellow', facecolor='none'
-        )
-        ax2.add_patch(rect)
-        
-    ax2.axis("off")
-    st.pyplot(fig2)
+        if pixel_count > 10:
+            y_indices, x_indices = np.where(mask_slice_T > 0)
+            x_min, x_max = x_indices.min(), x_indices.max()
+            y_min, y_max = y_indices.min(), y_indices.max()
+            padding = 3
+            width = (x_max - x_min) + (padding * 2)
+            height = (y_max - y_min) + (padding * 2)
+            
+            rect = patches.Rectangle(
+                (x_min - padding, y_min - padding), 
+                width, height, 
+                linewidth=2, edgecolor='yellow', facecolor='none'
+            )
+            ax.add_patch(rect)
+            
+        ax.axis("off")
+
+        # 5. Convert Plot to Web-Safe Image (Base64)
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.read()).decode("utf-8")
+
+        confidence = float(np.max(raw_prob_mask[:, :, target_slice][slice_binary > 0])) * 100 if pixel_count > 10 else 0.0
+
+        return JSONResponse({
+            "status": "success",
+            "slice_index": target_slice,
+            "tumor_detected": pixel_count > 10,
+            "confidence": round(confidence, 1),
+            "pixel_size": pixel_count,
+            "image_data": f"data:image/png;base64,{img_base64}"
+        })
+
+    finally:
+        os.unlink(tmp_path) # Clean up temp file

@@ -11,11 +11,11 @@ export default function Sidebar() {
 
   const navItems = [
     { icon: <CloudUpload />, label: "Upload & Inference", isAction: false, isUploader: true },
-    { icon: <Users />, label: "Patient List", isAction: false },
-    { icon: <Clock />, label: "Case History", isAction: false },
+    { icon: <Users />, label: "Patient List", isAction: true, action: () => alert("🔒 Hospital Database (PACS) connection required to view Patient List.") },
+    { icon: <Clock />, label: "Case History", isAction: true, action: () => alert("🔒 Hospital Database (PACS) connection required to view Case History.") },
     { icon: <Settings />, label: "Model Settings", isAction: true, action: () => setActiveModal('settings') },
     { icon: <Download />, label: "Export Report", isAction: true, action: () => setActiveModal('export') },
-    { icon: <FileText />, label: "Audit Logs", isAction: false },
+    { icon: <FileText />, label: "Audit Logs", isAction: true, action: () => alert("🔒 Admin privileges required to view system audit logs.") },
   ];
 
   return (
